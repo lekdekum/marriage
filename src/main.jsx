@@ -60,7 +60,7 @@ function App() {
     <main className="page-shell">
       <section className="hero" aria-labelledby="page-title">
         <p className="eyebrow">Save the date</p>
-        <h1 id="page-title">Our Wedding Countdown</h1>
+        <h1 id="page-title">Save the Date</h1>
         <p className="date-line">{targetLabel} UTC-3</p>
 
         {timeLeft.isComplete ? (
