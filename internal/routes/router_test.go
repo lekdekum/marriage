@@ -46,6 +46,10 @@ func TestConfirmationRouteAcceptsValidPayload(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusAccepted, response.StatusCode)
 	}
 
+	if allowOrigin := response.Header.Get("Access-Control-Allow-Origin"); allowOrigin != "*" {
+		t.Fatalf("expected CORS allow origin *, got %q", allowOrigin)
+	}
+
 	var responseBody struct {
 		Count int `json:"count"`
 	}
@@ -91,5 +95,40 @@ func TestConfirmationRouteRejectsInvalidPayload(t *testing.T) {
 
 	if len(responseBody.Details) != 3 {
 		t.Fatalf("expected 3 validation details, got %d", len(responseBody.Details))
+	}
+}
+
+func TestConfirmationRouteAcceptsCorsPreflight(t *testing.T) {
+	server := httptest.NewServer(NewRouter())
+	defer server.Close()
+
+	request, err := http.NewRequest(http.MethodOptions, server.URL+"/confirmation", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	request.Header.Set("Origin", "http://localhost:5173")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	request.Header.Set("Access-Control-Request-Headers", "content-type")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("OPTIONS /confirmation failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d", http.StatusNoContent, response.StatusCode)
+	}
+
+	if allowOrigin := response.Header.Get("Access-Control-Allow-Origin"); allowOrigin != "*" {
+		t.Fatalf("expected CORS allow origin *, got %q", allowOrigin)
+	}
+
+	if allowMethods := response.Header.Get("Access-Control-Allow-Methods"); allowMethods != "GET, POST, OPTIONS" {
+		t.Fatalf("expected allowed methods, got %q", allowMethods)
+	}
+
+	if allowHeaders := response.Header.Get("Access-Control-Allow-Headers"); allowHeaders != "Content-Type" {
+		t.Fatalf("expected allowed headers, got %q", allowHeaders)
 	}
 }
