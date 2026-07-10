@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: marriage-api
+    runtime: go
+    buildCommand: go build -tags netgo -ldflags '-s -w' -o app ./cmd/api
+    startCommand: ./app
+    healthCheckPath: /health
