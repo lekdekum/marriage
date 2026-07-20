@@ -1,7 +1,6 @@
 package routes
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -10,26 +9,29 @@ import (
 	"marriage/internal/services"
 )
 
-func NewRouter(confirmationService services.ConfirmationService, adminToken string, allowedOrigin string) http.Handler {
+func NewRouter(confirmationService services.ConfirmationService, authService services.AuthService, allowedOrigin string) http.Handler {
 	mux := http.NewServeMux()
 
 	healthController := controllers.NewHealthController()
 	mux.HandleFunc("GET /health", healthController.Show)
 
+	authController := controllers.NewAuthController(authService)
+	mux.HandleFunc("POST /login", authController.Login)
+
 	confirmationController := controllers.NewConfirmationController(confirmationService)
 	mux.HandleFunc("POST /confirmation", confirmationController.Create)
-	mux.HandleFunc("GET /admin/confirmations", withAdminToken(adminToken, confirmationController.List))
-	mux.HandleFunc("PATCH /admin/confirmations", withAdminToken(adminToken, confirmationController.Update))
-	mux.HandleFunc("DELETE /admin/confirmations", withAdminToken(adminToken, confirmationController.Delete))
+	mux.HandleFunc("GET /admin/confirmations", withAdminAuth(authService, confirmationController.List))
+	mux.HandleFunc("PATCH /admin/confirmations", withAdminAuth(authService, confirmationController.Update))
+	mux.HandleFunc("DELETE /admin/confirmations", withAdminAuth(authService, confirmationController.Delete))
 
 	return withCORS(mux, allowedOrigin)
 }
 
-func withAdminToken(adminToken string, handler http.HandlerFunc) http.HandlerFunc {
+func withAdminAuth(authService services.AuthService, handler http.HandlerFunc) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
-		if adminToken == "" {
+		if !authService.Configured() {
 			response.JSON(writer, http.StatusServiceUnavailable, response.Error{
-				Error: "admin token is not configured",
+				Error: "admin auth is not configured",
 			})
 			return
 		}
@@ -43,7 +45,7 @@ func withAdminToken(adminToken string, handler http.HandlerFunc) http.HandlerFun
 		}
 
 		token := strings.TrimPrefix(authorization, "Bearer ")
-		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(adminToken)) != 1 {
+		if token == "" || authService.ValidateToken(token) != nil {
 			response.JSON(writer, http.StatusUnauthorized, response.Error{
 				Error: http.StatusText(http.StatusUnauthorized),
 			})

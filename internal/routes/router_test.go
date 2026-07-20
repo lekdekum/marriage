@@ -11,6 +11,8 @@ import (
 
 	"marriage/internal/repositories"
 	"marriage/internal/services"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type fakeConfirmationRepository struct {
@@ -80,7 +82,37 @@ func newTestRouterWithRepository(repository *fakeConfirmationRepository) http.Ha
 }
 
 func newTestRouterWithRepositoryAndOrigin(repository *fakeConfirmationRepository, allowedOrigin string) http.Handler {
-	return NewRouter(services.NewConfirmationService(repository), "test-admin-token", allowedOrigin)
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("test-password"), bcrypt.MinCost)
+	if err != nil {
+		panic(err)
+	}
+
+	authService := services.NewAuthService(string(passwordHash), "test-jwt-secret", time.Hour)
+	return NewRouter(services.NewConfirmationService(repository), authService, allowedOrigin)
+}
+
+func loginAdmin(t *testing.T, serverURL string) string {
+	t.Helper()
+
+	loginBody := []byte(`{"password":"test-password"}`)
+	loginResponse, err := http.Post(serverURL+"/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		t.Fatalf("POST /login failed: %v", err)
+	}
+	defer loginResponse.Body.Close()
+
+	var loginResponseBody struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(loginResponse.Body).Decode(&loginResponseBody); err != nil {
+		t.Fatalf("failed to decode login response: %v", err)
+	}
+
+	if loginResponseBody.Token == "" {
+		t.Fatal("expected login token")
+	}
+
+	return loginResponseBody.Token
 }
 
 func TestHealthRoute(t *testing.T) {
@@ -234,6 +266,49 @@ func TestConfirmationRouteUsesConfiguredCorsOrigin(t *testing.T) {
 	}
 }
 
+func TestLoginRouteReturnsJWT(t *testing.T) {
+	server := httptest.NewServer(newTestRouter())
+	defer server.Close()
+
+	body := []byte(`{"password":"test-password"}`)
+	response, err := http.Post(server.URL+"/login", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /login failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.StatusCode)
+	}
+
+	var responseBody struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&responseBody); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+
+	if responseBody.Token == "" {
+		t.Fatal("expected JWT token")
+	}
+}
+
+func TestLoginRouteRejectsWrongPassword(t *testing.T) {
+	server := httptest.NewServer(newTestRouter())
+	defer server.Close()
+
+	body := []byte(`{"password":"wrong-password"}`)
+	response, err := http.Post(server.URL+"/login", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /login failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, response.StatusCode)
+	}
+}
+
 func TestAdminConfirmationRouteRejectsMissingToken(t *testing.T) {
 	server := httptest.NewServer(newTestRouter())
 	defer server.Close()
@@ -246,6 +321,35 @@ func TestAdminConfirmationRouteRejectsMissingToken(t *testing.T) {
 
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, response.StatusCode)
+	}
+}
+
+func TestAdminConfirmationRouteAcceptsLoginJWT(t *testing.T) {
+	email := "maria@example.com"
+	repository := &fakeConfirmationRepository{
+		confirmations: []repositories.Confirmation{
+			{ID: "72f22b5a-1489-4c38-a74e-f6611a9c7042", Name: "Maria Silva", Confirmation: true, Email: &email},
+		},
+	}
+	server := httptest.NewServer(newTestRouterWithRepository(repository))
+	defer server.Close()
+
+	token := loginAdmin(t, server.URL)
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/admin/confirmations", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("GET /admin/confirmations failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.StatusCode)
 	}
 }
 
@@ -263,7 +367,7 @@ func TestAdminConfirmationRouteListsConfirmations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
-	request.Header.Set("Authorization", "Bearer test-admin-token")
+	request.Header.Set("Authorization", "Bearer "+loginAdmin(t, server.URL))
 
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -299,7 +403,7 @@ func TestAdminConfirmationRouteUpdatesConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
-	request.Header.Set("Authorization", "Bearer test-admin-token")
+	request.Header.Set("Authorization", "Bearer "+loginAdmin(t, server.URL))
 	request.Header.Set("Content-Type", "application/json")
 
 	response, err := http.DefaultClient.Do(request)
@@ -331,7 +435,7 @@ func TestAdminConfirmationRouteDeletesConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
 	}
-	request.Header.Set("Authorization", "Bearer test-admin-token")
+	request.Header.Set("Authorization", "Bearer "+loginAdmin(t, server.URL))
 	request.Header.Set("Content-Type", "application/json")
 
 	response, err := http.DefaultClient.Do(request)
