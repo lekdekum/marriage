@@ -24,6 +24,7 @@ func Run() {
 	}
 	adminToken := os.Getenv("ADMIN_TOKEN")
 	allowedOrigin := os.Getenv("ALLOWED_ORIGIN")
+	emailSender := newConfirmationEmailSenderFromEnv()
 
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
@@ -48,7 +49,7 @@ func Run() {
 
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      routes.NewRouter(services.NewConfirmationService(confirmationRepository), adminToken, allowedOrigin),
+		Handler:      routes.NewRouter(services.NewConfirmationService(confirmationRepository, emailSender), adminToken, allowedOrigin),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -59,6 +60,28 @@ func Run() {
 		slog.Error("api server stopped unexpectedly", "error", err)
 		os.Exit(1)
 	}
+}
+
+func newConfirmationEmailSenderFromEnv() services.ConfirmationEmailSender {
+	provider := os.Getenv("EMAIL_PROVIDER")
+	if provider == "" {
+		slog.Info("confirmation email sender disabled")
+		return nil
+	}
+
+	if provider != "resend" {
+		slog.Error("unsupported email provider", "provider", provider)
+		return nil
+	}
+
+	apiKey := os.Getenv("RESEND_API_KEY")
+	from := os.Getenv("EMAIL_FROM")
+	if apiKey == "" || from == "" {
+		slog.Error("resend email sender is not configured")
+		return nil
+	}
+
+	return services.NewResendConfirmationEmailSender(apiKey, from)
 }
 
 func envOrDefault(key string, fallback string) string {
