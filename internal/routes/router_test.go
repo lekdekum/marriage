@@ -54,7 +54,11 @@ func newTestRouter() http.Handler {
 }
 
 func newTestRouterWithRepository(repository *fakeConfirmationRepository) http.Handler {
-	return NewRouter(services.NewConfirmationService(repository), "test-admin-token")
+	return newTestRouterWithRepositoryAndOrigin(repository, "*")
+}
+
+func newTestRouterWithRepositoryAndOrigin(repository *fakeConfirmationRepository, allowedOrigin string) http.Handler {
+	return NewRouter(services.NewConfirmationService(repository), "test-admin-token", allowedOrigin)
 }
 
 func TestHealthRoute(t *testing.T) {
@@ -179,6 +183,32 @@ func TestConfirmationRouteAcceptsCorsPreflight(t *testing.T) {
 
 	if allowHeaders := response.Header.Get("Access-Control-Allow-Headers"); allowHeaders != "Authorization, Content-Type" {
 		t.Fatalf("expected allowed headers, got %q", allowHeaders)
+	}
+}
+
+func TestConfirmationRouteUsesConfiguredCorsOrigin(t *testing.T) {
+	server := httptest.NewServer(newTestRouterWithRepositoryAndOrigin(
+		&fakeConfirmationRepository{},
+		"https://marriage.example.com",
+	))
+	defer server.Close()
+
+	request, err := http.NewRequest(http.MethodOptions, server.URL+"/confirmation", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	request.Header.Set("Origin", "https://marriage.example.com")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	request.Header.Set("Access-Control-Request-Headers", "content-type")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("OPTIONS /confirmation failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if allowOrigin := response.Header.Get("Access-Control-Allow-Origin"); allowOrigin != "https://marriage.example.com" {
+		t.Fatalf("expected configured CORS allow origin, got %q", allowOrigin)
 	}
 }
 

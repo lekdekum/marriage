@@ -10,7 +10,7 @@ import (
 	"marriage/internal/services"
 )
 
-func NewRouter(confirmationService services.ConfirmationService, adminToken string) http.Handler {
+func NewRouter(confirmationService services.ConfirmationService, adminToken string, allowedOrigin string) http.Handler {
 	mux := http.NewServeMux()
 
 	healthController := controllers.NewHealthController()
@@ -22,7 +22,7 @@ func NewRouter(confirmationService services.ConfirmationService, adminToken stri
 	mux.HandleFunc("PATCH /admin/confirmations", withAdminToken(adminToken, confirmationController.Update))
 	mux.HandleFunc("DELETE /admin/confirmations", withAdminToken(adminToken, confirmationController.Delete))
 
-	return withCORS(mux)
+	return withCORS(mux, allowedOrigin)
 }
 
 func withAdminToken(adminToken string, handler http.HandlerFunc) http.HandlerFunc {
@@ -54,9 +54,13 @@ func withAdminToken(adminToken string, handler http.HandlerFunc) http.HandlerFun
 	}
 }
 
-func withCORS(next http.Handler) http.Handler {
+func withCORS(next http.Handler, allowedOrigin string) http.Handler {
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
+
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 

@@ -23,6 +23,7 @@ func Run() {
 		os.Exit(1)
 	}
 	adminToken := os.Getenv("ADMIN_TOKEN")
+	allowedOrigin := os.Getenv("ALLOWED_ORIGIN")
 
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
@@ -47,7 +48,7 @@ func Run() {
 
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      routes.NewRouter(services.NewConfirmationService(confirmationRepository), adminToken),
+		Handler:      routes.NewRouter(services.NewConfirmationService(confirmationRepository), adminToken, allowedOrigin),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
