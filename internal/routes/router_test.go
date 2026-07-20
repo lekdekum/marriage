@@ -2,14 +2,31 @@ package routes
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"marriage/internal/repositories"
+	"marriage/internal/services"
 )
 
+type fakeConfirmationRepository struct {
+	confirmations []repositories.Confirmation
+}
+
+func (repository *fakeConfirmationRepository) Create(ctx context.Context, confirmations []repositories.Confirmation) error {
+	repository.confirmations = append(repository.confirmations, confirmations...)
+	return nil
+}
+
+func newTestRouter() http.Handler {
+	return NewRouter(services.NewConfirmationService(&fakeConfirmationRepository{}))
+}
+
 func TestHealthRoute(t *testing.T) {
-	server := httptest.NewServer(NewRouter())
+	server := httptest.NewServer(newTestRouter())
 	defer server.Close()
 
 	response, err := http.Get(server.URL + "/health")
@@ -28,7 +45,7 @@ func TestHealthRoute(t *testing.T) {
 }
 
 func TestConfirmationRouteAcceptsValidPayload(t *testing.T) {
-	server := httptest.NewServer(NewRouter())
+	server := httptest.NewServer(newTestRouter())
 	defer server.Close()
 
 	body := []byte(`[
@@ -63,7 +80,7 @@ func TestConfirmationRouteAcceptsValidPayload(t *testing.T) {
 }
 
 func TestConfirmationRouteRejectsInvalidPayload(t *testing.T) {
-	server := httptest.NewServer(NewRouter())
+	server := httptest.NewServer(newTestRouter())
 	defer server.Close()
 
 	body := []byte(`[
@@ -99,7 +116,7 @@ func TestConfirmationRouteRejectsInvalidPayload(t *testing.T) {
 }
 
 func TestConfirmationRouteAcceptsCorsPreflight(t *testing.T) {
-	server := httptest.NewServer(NewRouter())
+	server := httptest.NewServer(newTestRouter())
 	defer server.Close()
 
 	request, err := http.NewRequest(http.MethodOptions, server.URL+"/confirmation", nil)

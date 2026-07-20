@@ -2,15 +2,21 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
-	"io"
 	"net/mail"
-	"os"
 	"strings"
+	"time"
+
+	"marriage/internal/repositories"
 )
 
+type ConfirmationRepository interface {
+	Create(ctx context.Context, confirmations []repositories.Confirmation) error
+}
+
 type ConfirmationService struct {
-	output io.Writer
+	repository ConfirmationRepository
 }
 
 type ConfirmationRequest struct {
@@ -31,14 +37,9 @@ func (err ValidationError) Error() string {
 	return "validation failed"
 }
 
-func NewConfirmationService(output ...io.Writer) ConfirmationService {
-	writer := io.Writer(os.Stdout)
-	if len(output) > 0 && output[0] != nil {
-		writer = output[0]
-	}
-
+func NewConfirmationService(repository ConfirmationRepository) ConfirmationService {
 	return ConfirmationService{
-		output: writer,
+		repository: repository,
 	}
 }
 
@@ -68,14 +69,35 @@ func (service ConfirmationService) Create(ctx context.Context, confirmations []C
 		return ConfirmationResult{}, ValidationError{Details: details}
 	}
 
+	records := make([]repositories.Confirmation, 0, len(confirmations))
+	now := time.Now().UTC()
 	for _, confirmation := range confirmations {
-		fmt.Fprintf(
-			service.output,
-			"name=%q confirm=%t email=%q\n",
-			strings.TrimSpace(confirmation.Name),
-			*confirmation.Confirm,
-			confirmation.Email,
-		)
+		id, err := newUUID()
+		if err != nil {
+			return ConfirmationResult{}, fmt.Errorf("generate confirmation id: %w", err)
+		}
+
+		var email *string
+		if confirmation.Email != "" {
+			trimmedEmail := strings.TrimSpace(confirmation.Email)
+			email = &trimmedEmail
+		}
+
+		records = append(records, repositories.Confirmation{
+			ID:           id,
+			Name:         strings.TrimSpace(confirmation.Name),
+			Confirmation: *confirmation.Confirm,
+			Email:        email,
+			Timestamp:    now,
+		})
+	}
+
+	if service.repository == nil {
+		return ConfirmationResult{}, fmt.Errorf("confirmation repository is not configured")
+	}
+
+	if err := service.repository.Create(ctx, records); err != nil {
+		return ConfirmationResult{}, fmt.Errorf("save confirmations: %w", err)
 	}
 
 	return ConfirmationResult{
@@ -86,4 +108,23 @@ func (service ConfirmationService) Create(ctx context.Context, confirmations []C
 func isValidEmail(email string) bool {
 	address, err := mail.ParseAddress(email)
 	return err == nil && address.Address == email
+}
+
+func newUUID() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+
+	bytes[6] = (bytes[6] & 0x0f) | 0x40
+	bytes[8] = (bytes[8] & 0x3f) | 0x80
+
+	return fmt.Sprintf(
+		"%x-%x-%x-%x-%x",
+		bytes[0:4],
+		bytes[4:6],
+		bytes[6:8],
+		bytes[8:10],
+		bytes[10:16],
+	), nil
 }

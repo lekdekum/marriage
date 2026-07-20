@@ -13,9 +13,9 @@ type ConfirmationController struct {
 	service services.ConfirmationService
 }
 
-func NewConfirmationController() ConfirmationController {
+func NewConfirmationController(service services.ConfirmationService) ConfirmationController {
 	return ConfirmationController{
-		service: services.NewConfirmationService(),
+		service: service,
 	}
 }
 

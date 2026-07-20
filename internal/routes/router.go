@@ -4,15 +4,16 @@ import (
 	"net/http"
 
 	"marriage/internal/controllers"
+	"marriage/internal/services"
 )
 
-func NewRouter() http.Handler {
+func NewRouter(confirmationService services.ConfirmationService) http.Handler {
 	mux := http.NewServeMux()
 
 	healthController := controllers.NewHealthController()
 	mux.HandleFunc("GET /health", healthController.Show)
 
-	confirmationController := controllers.NewConfirmationController()
+	confirmationController := controllers.NewConfirmationController(confirmationService)
 	mux.HandleFunc("POST /confirmation", confirmationController.Create)
 
 	return withCORS(mux)
