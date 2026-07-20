@@ -16,6 +16,34 @@ func (repository *fakeConfirmationRepository) Create(ctx context.Context, confir
 	return nil
 }
 
+func (repository *fakeConfirmationRepository) List(ctx context.Context) ([]repositories.Confirmation, error) {
+	return repository.confirmations, nil
+}
+
+func (repository *fakeConfirmationRepository) Update(ctx context.Context, confirmation repositories.Confirmation) (bool, error) {
+	for index := range repository.confirmations {
+		if repository.confirmations[index].ID == confirmation.ID {
+			repository.confirmations[index].Name = confirmation.Name
+			repository.confirmations[index].Confirmation = confirmation.Confirmation
+			repository.confirmations[index].Email = confirmation.Email
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (repository *fakeConfirmationRepository) Delete(ctx context.Context, id string) (bool, error) {
+	for index := range repository.confirmations {
+		if repository.confirmations[index].ID == id {
+			repository.confirmations = append(repository.confirmations[:index], repository.confirmations[index+1:]...)
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func TestConfirmationServiceAcceptsValidConfirmationsAndSavesThem(t *testing.T) {
 	repository := &fakeConfirmationRepository{}
 	service := NewConfirmationService(repository)
@@ -87,5 +115,99 @@ func TestConfirmationServiceRejectsInvalidConfirmations(t *testing.T) {
 
 	if len(repository.confirmations) != 0 {
 		t.Fatalf("expected no saved confirmations, got %d", len(repository.confirmations))
+	}
+}
+
+func TestConfirmationServiceListsConfirmations(t *testing.T) {
+	email := "maria@example.com"
+	repository := &fakeConfirmationRepository{
+		confirmations: []repositories.Confirmation{
+			{ID: "72f22b5a-1489-4c38-a74e-f6611a9c7042", Name: "Maria Silva", Confirmation: true, Email: &email},
+		},
+	}
+	service := NewConfirmationService(repository)
+
+	confirmations, err := service.List(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if len(confirmations) != 1 {
+		t.Fatalf("expected 1 confirmation, got %d", len(confirmations))
+	}
+
+	if confirmations[0].ID != "72f22b5a-1489-4c38-a74e-f6611a9c7042" {
+		t.Fatalf("expected confirmation id, got %q", confirmations[0].ID)
+	}
+}
+
+func TestConfirmationServiceUpdatesConfirmation(t *testing.T) {
+	repository := &fakeConfirmationRepository{
+		confirmations: []repositories.Confirmation{
+			{ID: "72f22b5a-1489-4c38-a74e-f6611a9c7042", Name: "Maria Silva", Confirmation: true},
+		},
+	}
+	service := NewConfirmationService(repository)
+	no := false
+
+	confirmation, err := service.Update(context.Background(), UpdateConfirmationRequest{
+		ID:           "72f22b5a-1489-4c38-a74e-f6611a9c7042",
+		Name:         "Maria Santos",
+		Confirmation: &no,
+		Email:        "",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if confirmation.Name != "Maria Santos" {
+		t.Fatalf("expected updated name, got %q", confirmation.Name)
+	}
+
+	if confirmation.Confirmation {
+		t.Fatal("expected updated confirmation to be false")
+	}
+}
+
+func TestConfirmationServiceRejectsInvalidUpdate(t *testing.T) {
+	repository := &fakeConfirmationRepository{}
+	service := NewConfirmationService(repository)
+
+	_, err := service.Update(context.Background(), UpdateConfirmationRequest{
+		ID:    "",
+		Name:  "",
+		Email: "not-valid",
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+
+	validationError, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("expected ValidationError, got %T", err)
+	}
+
+	if len(validationError.Details) != 4 {
+		t.Fatalf("expected 4 validation details, got %d", len(validationError.Details))
+	}
+}
+
+func TestConfirmationServiceDeletesConfirmation(t *testing.T) {
+	repository := &fakeConfirmationRepository{
+		confirmations: []repositories.Confirmation{
+			{ID: "72f22b5a-1489-4c38-a74e-f6611a9c7042", Name: "Maria Silva", Confirmation: true},
+		},
+	}
+	service := NewConfirmationService(repository)
+
+	err := service.Delete(context.Background(), DeleteConfirmationRequest{
+		ID: "72f22b5a-1489-4c38-a74e-f6611a9c7042",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if len(repository.confirmations) != 0 {
+		t.Fatalf("expected confirmation to be deleted, got %d records", len(repository.confirmations))
 	}
 }

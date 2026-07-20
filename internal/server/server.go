@@ -22,6 +22,7 @@ func Run() {
 		slog.Error("DATABASE_URL is required")
 		os.Exit(1)
 	}
+	adminToken := os.Getenv("ADMIN_TOKEN")
 
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
@@ -46,7 +47,7 @@ func Run() {
 
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      routes.NewRouter(services.NewConfirmationService(confirmationRepository)),
+		Handler:      routes.NewRouter(services.NewConfirmationService(confirmationRepository), adminToken),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,

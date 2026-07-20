@@ -21,8 +21,40 @@ func (repository *fakeConfirmationRepository) Create(ctx context.Context, confir
 	return nil
 }
 
+func (repository *fakeConfirmationRepository) List(ctx context.Context) ([]repositories.Confirmation, error) {
+	return repository.confirmations, nil
+}
+
+func (repository *fakeConfirmationRepository) Update(ctx context.Context, confirmation repositories.Confirmation) (bool, error) {
+	for index := range repository.confirmations {
+		if repository.confirmations[index].ID == confirmation.ID {
+			repository.confirmations[index].Name = confirmation.Name
+			repository.confirmations[index].Confirmation = confirmation.Confirmation
+			repository.confirmations[index].Email = confirmation.Email
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (repository *fakeConfirmationRepository) Delete(ctx context.Context, id string) (bool, error) {
+	for index := range repository.confirmations {
+		if repository.confirmations[index].ID == id {
+			repository.confirmations = append(repository.confirmations[:index], repository.confirmations[index+1:]...)
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func newTestRouter() http.Handler {
-	return NewRouter(services.NewConfirmationService(&fakeConfirmationRepository{}))
+	return newTestRouterWithRepository(&fakeConfirmationRepository{})
+}
+
+func newTestRouterWithRepository(repository *fakeConfirmationRepository) http.Handler {
+	return NewRouter(services.NewConfirmationService(repository), "test-admin-token")
 }
 
 func TestHealthRoute(t *testing.T) {
@@ -141,11 +173,126 @@ func TestConfirmationRouteAcceptsCorsPreflight(t *testing.T) {
 		t.Fatalf("expected CORS allow origin *, got %q", allowOrigin)
 	}
 
-	if allowMethods := response.Header.Get("Access-Control-Allow-Methods"); allowMethods != "GET, POST, OPTIONS" {
+	if allowMethods := response.Header.Get("Access-Control-Allow-Methods"); allowMethods != "GET, POST, PATCH, DELETE, OPTIONS" {
 		t.Fatalf("expected allowed methods, got %q", allowMethods)
 	}
 
-	if allowHeaders := response.Header.Get("Access-Control-Allow-Headers"); allowHeaders != "Content-Type" {
+	if allowHeaders := response.Header.Get("Access-Control-Allow-Headers"); allowHeaders != "Authorization, Content-Type" {
 		t.Fatalf("expected allowed headers, got %q", allowHeaders)
+	}
+}
+
+func TestAdminConfirmationRouteRejectsMissingToken(t *testing.T) {
+	server := httptest.NewServer(newTestRouter())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/admin/confirmations")
+	if err != nil {
+		t.Fatalf("GET /admin/confirmations failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, response.StatusCode)
+	}
+}
+
+func TestAdminConfirmationRouteListsConfirmations(t *testing.T) {
+	email := "maria@example.com"
+	repository := &fakeConfirmationRepository{
+		confirmations: []repositories.Confirmation{
+			{ID: "72f22b5a-1489-4c38-a74e-f6611a9c7042", Name: "Maria Silva", Confirmation: true, Email: &email},
+		},
+	}
+	server := httptest.NewServer(newTestRouterWithRepository(repository))
+	defer server.Close()
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/admin/confirmations", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer test-admin-token")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("GET /admin/confirmations failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.StatusCode)
+	}
+
+	var responseBody []services.ConfirmationResponse
+	if err := json.NewDecoder(response.Body).Decode(&responseBody); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+
+	if len(responseBody) != 1 {
+		t.Fatalf("expected 1 confirmation, got %d", len(responseBody))
+	}
+}
+
+func TestAdminConfirmationRouteUpdatesConfirmation(t *testing.T) {
+	repository := &fakeConfirmationRepository{
+		confirmations: []repositories.Confirmation{
+			{ID: "72f22b5a-1489-4c38-a74e-f6611a9c7042", Name: "Maria Silva", Confirmation: true},
+		},
+	}
+	server := httptest.NewServer(newTestRouterWithRepository(repository))
+	defer server.Close()
+
+	body := []byte(`{"id":"72f22b5a-1489-4c38-a74e-f6611a9c7042","name":"Maria Santos","confirmation":false,"email":""}`)
+	request, err := http.NewRequest(http.MethodPatch, server.URL+"/admin/confirmations", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer test-admin-token")
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("PATCH /admin/confirmations failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.StatusCode)
+	}
+
+	if repository.confirmations[0].Name != "Maria Santos" {
+		t.Fatalf("expected updated name, got %q", repository.confirmations[0].Name)
+	}
+}
+
+func TestAdminConfirmationRouteDeletesConfirmation(t *testing.T) {
+	repository := &fakeConfirmationRepository{
+		confirmations: []repositories.Confirmation{
+			{ID: "72f22b5a-1489-4c38-a74e-f6611a9c7042", Name: "Maria Silva", Confirmation: true},
+		},
+	}
+	server := httptest.NewServer(newTestRouterWithRepository(repository))
+	defer server.Close()
+
+	body := []byte(`{"id":"72f22b5a-1489-4c38-a74e-f6611a9c7042"}`)
+	request, err := http.NewRequest(http.MethodDelete, server.URL+"/admin/confirmations", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer test-admin-token")
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("DELETE /admin/confirmations failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d", http.StatusNoContent, response.StatusCode)
+	}
+
+	if len(repository.confirmations) != 0 {
+		t.Fatalf("expected confirmation to be deleted, got %d records", len(repository.confirmations))
 	}
 }

@@ -47,3 +47,88 @@ func (controller ConfirmationController) Create(writer http.ResponseWriter, requ
 
 	response.JSON(writer, http.StatusAccepted, result)
 }
+
+func (controller ConfirmationController) List(writer http.ResponseWriter, request *http.Request) {
+	confirmations, err := controller.service.List(request.Context())
+	if err != nil {
+		response.JSON(writer, http.StatusInternalServerError, response.Error{
+			Error: http.StatusText(http.StatusInternalServerError),
+		})
+		return
+	}
+
+	response.JSON(writer, http.StatusOK, confirmations)
+}
+
+func (controller ConfirmationController) Update(writer http.ResponseWriter, request *http.Request) {
+	var updateRequest services.UpdateConfirmationRequest
+	if err := json.NewDecoder(request.Body).Decode(&updateRequest); err != nil {
+		response.JSON(writer, http.StatusBadRequest, response.Error{
+			Error: "invalid JSON body",
+		})
+		return
+	}
+
+	confirmation, err := controller.service.Update(request.Context(), updateRequest)
+	if err != nil {
+		var validationError services.ValidationError
+		if errors.As(err, &validationError) {
+			response.JSON(writer, http.StatusBadRequest, response.ValidationError{
+				Error:   "invalid confirmation request",
+				Details: validationError.Details,
+			})
+			return
+		}
+
+		var notFoundError services.NotFoundError
+		if errors.As(err, &notFoundError) {
+			response.JSON(writer, http.StatusNotFound, response.Error{
+				Error: "confirmation not found",
+			})
+			return
+		}
+
+		response.JSON(writer, http.StatusInternalServerError, response.Error{
+			Error: http.StatusText(http.StatusInternalServerError),
+		})
+		return
+	}
+
+	response.JSON(writer, http.StatusOK, confirmation)
+}
+
+func (controller ConfirmationController) Delete(writer http.ResponseWriter, request *http.Request) {
+	var deleteRequest services.DeleteConfirmationRequest
+	if err := json.NewDecoder(request.Body).Decode(&deleteRequest); err != nil {
+		response.JSON(writer, http.StatusBadRequest, response.Error{
+			Error: "invalid JSON body",
+		})
+		return
+	}
+
+	if err := controller.service.Delete(request.Context(), deleteRequest); err != nil {
+		var validationError services.ValidationError
+		if errors.As(err, &validationError) {
+			response.JSON(writer, http.StatusBadRequest, response.ValidationError{
+				Error:   "invalid confirmation request",
+				Details: validationError.Details,
+			})
+			return
+		}
+
+		var notFoundError services.NotFoundError
+		if errors.As(err, &notFoundError) {
+			response.JSON(writer, http.StatusNotFound, response.Error{
+				Error: "confirmation not found",
+			})
+			return
+		}
+
+		response.JSON(writer, http.StatusInternalServerError, response.Error{
+			Error: http.StatusText(http.StatusInternalServerError),
+		})
+		return
+	}
+
+	writer.WriteHeader(http.StatusNoContent)
+}
