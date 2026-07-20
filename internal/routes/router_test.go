@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"marriage/internal/repositories"
 	"marriage/internal/services"
@@ -47,6 +48,27 @@ func (repository *fakeConfirmationRepository) Delete(ctx context.Context, id str
 	}
 
 	return false, nil
+}
+
+func (repository *fakeConfirmationRepository) HasEmailSent(ctx context.Context, email string) (bool, error) {
+	for _, confirmation := range repository.confirmations {
+		if confirmation.Email != nil && *confirmation.Email == email && confirmation.EmailSentAt != nil {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (repository *fakeConfirmationRepository) MarkEmailSent(ctx context.Context, id string, sentAt time.Time) error {
+	for index := range repository.confirmations {
+		if repository.confirmations[index].ID == id {
+			repository.confirmations[index].EmailSentAt = &sentAt
+			return nil
+		}
+	}
+
+	return nil
 }
 
 func newTestRouter() http.Handler {

@@ -13,6 +13,7 @@ type Confirmation struct {
 	Confirmation bool
 	Email        *string
 	Timestamp    time.Time
+	EmailSentAt  *time.Time
 }
 
 type PostgresConfirmationRepository struct {
@@ -32,11 +33,20 @@ func (repository PostgresConfirmationRepository) Migrate(ctx context.Context) er
 			name TEXT NOT NULL,
 			confirmation BOOLEAN NOT NULL,
 			email TEXT,
-			"timestamp" TIMESTAMPTZ NOT NULL
+			"timestamp" TIMESTAMPTZ NOT NULL,
+			email_sent_at TIMESTAMPTZ
 		)
 	`)
 	if err != nil {
 		return fmt.Errorf("create confirmations table: %w", err)
+	}
+
+	_, err = repository.db.ExecContext(ctx, `
+		ALTER TABLE confirmations
+		ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ
+	`)
+	if err != nil {
+		return fmt.Errorf("add email_sent_at column: %w", err)
 	}
 
 	return nil
@@ -88,7 +98,7 @@ func (repository PostgresConfirmationRepository) Create(ctx context.Context, con
 
 func (repository PostgresConfirmationRepository) List(ctx context.Context) ([]Confirmation, error) {
 	rows, err := repository.db.QueryContext(ctx, `
-		SELECT id, name, confirmation, email, "timestamp"
+		SELECT id, name, confirmation, email, "timestamp", email_sent_at
 		FROM confirmations
 		ORDER BY "timestamp" DESC
 	`)
@@ -101,6 +111,7 @@ func (repository PostgresConfirmationRepository) List(ctx context.Context) ([]Co
 	for rows.Next() {
 		var confirmation Confirmation
 		var email sql.NullString
+		var emailSentAt sql.NullTime
 
 		if err := rows.Scan(
 			&confirmation.ID,
@@ -108,6 +119,7 @@ func (repository PostgresConfirmationRepository) List(ctx context.Context) ([]Co
 			&confirmation.Confirmation,
 			&email,
 			&confirmation.Timestamp,
+			&emailSentAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan confirmation: %w", err)
 		}
@@ -115,6 +127,11 @@ func (repository PostgresConfirmationRepository) List(ctx context.Context) ([]Co
 		if email.Valid {
 			emailValue := email.String
 			confirmation.Email = &emailValue
+		}
+
+		if emailSentAt.Valid {
+			emailSentAtValue := emailSentAt.Time
+			confirmation.EmailSentAt = &emailSentAtValue
 		}
 
 		confirmations = append(confirmations, confirmation)
@@ -151,6 +168,36 @@ func (repository PostgresConfirmationRepository) Update(ctx context.Context, con
 	}
 
 	return rowsAffected > 0, nil
+}
+
+func (repository PostgresConfirmationRepository) HasEmailSent(ctx context.Context, email string) (bool, error) {
+	var exists bool
+	err := repository.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM confirmations
+			WHERE lower(email) = lower($1)
+				AND email_sent_at IS NOT NULL
+		)
+	`, email).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check email sent: %w", err)
+	}
+
+	return exists, nil
+}
+
+func (repository PostgresConfirmationRepository) MarkEmailSent(ctx context.Context, id string, sentAt time.Time) error {
+	_, err := repository.db.ExecContext(ctx, `
+		UPDATE confirmations
+		SET email_sent_at = $2
+		WHERE id = $1
+	`, id, sentAt)
+	if err != nil {
+		return fmt.Errorf("mark email sent: %w", err)
+	}
+
+	return nil
 }
 
 func (repository PostgresConfirmationRepository) Delete(ctx context.Context, id string) (bool, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"net/mail"
 	"strings"
 	"time"
@@ -16,16 +17,30 @@ type ConfirmationRepository interface {
 	List(ctx context.Context) ([]repositories.Confirmation, error)
 	Update(ctx context.Context, confirmation repositories.Confirmation) (bool, error)
 	Delete(ctx context.Context, id string) (bool, error)
+	HasEmailSent(ctx context.Context, email string) (bool, error)
+	MarkEmailSent(ctx context.Context, id string, sentAt time.Time) error
+}
+
+type ConfirmationEmailSender interface {
+	SendConfirmation(ctx context.Context, email ConfirmationEmail) error
+}
+
+type ConfirmationEmail struct {
+	To           string
+	Name         string
+	Confirmation bool
 }
 
 type ConfirmationService struct {
-	repository ConfirmationRepository
+	repository  ConfirmationRepository
+	emailSender ConfirmationEmailSender
 }
 
 type ConfirmationRequest struct {
-	Name    string `json:"name"`
-	Confirm *bool  `json:"confirm"`
-	Email   string `json:"email"`
+	Name      string `json:"name"`
+	Confirm   *bool  `json:"confirm"`
+	Email     string `json:"email"`
+	FireEmail bool   `json:"fireEmail"`
 }
 
 type ConfirmationResult struct {
@@ -38,6 +53,7 @@ type ConfirmationResponse struct {
 	Confirmation bool       `json:"confirmation"`
 	Email        *string    `json:"email"`
 	Timestamp    *time.Time `json:"timestamp,omitempty"`
+	EmailSentAt  *time.Time `json:"emailSentAt,omitempty"`
 }
 
 type UpdateConfirmationRequest struct {
@@ -65,9 +81,15 @@ func (err ValidationError) Error() string {
 	return "validation failed"
 }
 
-func NewConfirmationService(repository ConfirmationRepository) ConfirmationService {
+func NewConfirmationService(repository ConfirmationRepository, emailSender ...ConfirmationEmailSender) ConfirmationService {
+	var sender ConfirmationEmailSender
+	if len(emailSender) > 0 && emailSender[0] != nil {
+		sender = emailSender[0]
+	}
+
 	return ConfirmationService{
-		repository: repository,
+		repository:  repository,
+		emailSender: sender,
 	}
 }
 
@@ -97,7 +119,13 @@ func (service ConfirmationService) Create(ctx context.Context, confirmations []C
 		return ConfirmationResult{}, ValidationError{Details: details}
 	}
 
+	type emailCandidate struct {
+		record repositories.Confirmation
+		send   bool
+	}
+
 	records := make([]repositories.Confirmation, 0, len(confirmations))
+	emailCandidates := make([]emailCandidate, 0, len(confirmations))
 	now := time.Now().UTC()
 	for _, confirmation := range confirmations {
 		id, err := newUUID()
@@ -111,12 +139,18 @@ func (service ConfirmationService) Create(ctx context.Context, confirmations []C
 			email = &trimmedEmail
 		}
 
-		records = append(records, repositories.Confirmation{
+		record := repositories.Confirmation{
 			ID:           id,
 			Name:         strings.TrimSpace(confirmation.Name),
 			Confirmation: *confirmation.Confirm,
 			Email:        email,
 			Timestamp:    now,
+		}
+
+		records = append(records, record)
+		emailCandidates = append(emailCandidates, emailCandidate{
+			record: record,
+			send:   confirmation.FireEmail && email != nil,
 		})
 	}
 
@@ -126,6 +160,16 @@ func (service ConfirmationService) Create(ctx context.Context, confirmations []C
 
 	if err := service.repository.Create(ctx, records); err != nil {
 		return ConfirmationResult{}, fmt.Errorf("save confirmations: %w", err)
+	}
+
+	for _, candidate := range emailCandidates {
+		if !candidate.send {
+			continue
+		}
+
+		if err := service.sendConfirmationEmail(ctx, candidate.record); err != nil {
+			slog.Error("failed to send confirmation email", "error", err, "confirmation_id", candidate.record.ID)
+		}
 	}
 
 	return ConfirmationResult{
@@ -152,6 +196,7 @@ func (service ConfirmationService) List(ctx context.Context) ([]ConfirmationResp
 			Confirmation: confirmation.Confirmation,
 			Email:        confirmation.Email,
 			Timestamp:    &timestamp,
+			EmailSentAt:  confirmation.EmailSentAt,
 		})
 	}
 
@@ -238,6 +283,44 @@ func (service ConfirmationService) Delete(ctx context.Context, request DeleteCon
 func isValidEmail(email string) bool {
 	address, err := mail.ParseAddress(email)
 	return err == nil && address.Address == email
+}
+
+func (service ConfirmationService) sendConfirmationEmail(ctx context.Context, confirmation repositories.Confirmation) error {
+	if confirmation.Email == nil {
+		return nil
+	}
+
+	email := strings.TrimSpace(*confirmation.Email)
+	if email == "" {
+		return nil
+	}
+
+	alreadySent, err := service.repository.HasEmailSent(ctx, email)
+	if err != nil {
+		return fmt.Errorf("check email sent: %w", err)
+	}
+
+	if alreadySent {
+		return nil
+	}
+
+	if service.emailSender == nil {
+		return fmt.Errorf("confirmation email sender is not configured")
+	}
+
+	if err := service.emailSender.SendConfirmation(ctx, ConfirmationEmail{
+		To:           email,
+		Name:         confirmation.Name,
+		Confirmation: confirmation.Confirmation,
+	}); err != nil {
+		return fmt.Errorf("send confirmation email: %w", err)
+	}
+
+	if err := service.repository.MarkEmailSent(ctx, confirmation.ID, time.Now().UTC()); err != nil {
+		return fmt.Errorf("mark email sent: %w", err)
+	}
+
+	return nil
 }
 
 func newUUID() (string, error) {

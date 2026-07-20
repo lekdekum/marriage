@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"marriage/internal/repositories"
 )
@@ -42,6 +44,37 @@ func (repository *fakeConfirmationRepository) Delete(ctx context.Context, id str
 	}
 
 	return false, nil
+}
+
+func (repository *fakeConfirmationRepository) HasEmailSent(ctx context.Context, email string) (bool, error) {
+	for _, confirmation := range repository.confirmations {
+		if confirmation.Email != nil && *confirmation.Email == email && confirmation.EmailSentAt != nil {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (repository *fakeConfirmationRepository) MarkEmailSent(ctx context.Context, id string, sentAt time.Time) error {
+	for index := range repository.confirmations {
+		if repository.confirmations[index].ID == id {
+			repository.confirmations[index].EmailSentAt = &sentAt
+			return nil
+		}
+	}
+
+	return nil
+}
+
+type fakeConfirmationEmailSender struct {
+	emails []ConfirmationEmail
+	err    error
+}
+
+func (sender *fakeConfirmationEmailSender) SendConfirmation(ctx context.Context, email ConfirmationEmail) error {
+	sender.emails = append(sender.emails, email)
+	return sender.err
 }
 
 func TestConfirmationServiceAcceptsValidConfirmationsAndSavesThem(t *testing.T) {
@@ -88,6 +121,172 @@ func TestConfirmationServiceAcceptsValidConfirmationsAndSavesThem(t *testing.T) 
 
 	if repository.confirmations[0].Timestamp.IsZero() {
 		t.Fatal("expected saved confirmation to include timestamp")
+	}
+}
+
+func TestConfirmationServiceDoesNotSendEmailWhenFireEmailIsOmitted(t *testing.T) {
+	repository := &fakeConfirmationRepository{}
+	sender := &fakeConfirmationEmailSender{}
+	service := NewConfirmationService(repository, sender)
+	yes := true
+
+	result, err := service.Create(context.Background(), []ConfirmationRequest{
+		{Name: "Maria Silva", Confirm: &yes, Email: "maria@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count 1, got %d", result.Count)
+	}
+
+	if len(sender.emails) != 0 {
+		t.Fatalf("expected no emails to be sent, got %d", len(sender.emails))
+	}
+}
+
+func TestConfirmationServiceDoesNotSendEmailWhenFireEmailIsFalse(t *testing.T) {
+	repository := &fakeConfirmationRepository{}
+	sender := &fakeConfirmationEmailSender{}
+	service := NewConfirmationService(repository, sender)
+	yes := true
+
+	result, err := service.Create(context.Background(), []ConfirmationRequest{
+		{Name: "Maria Silva", Confirm: &yes, Email: "maria@example.com", FireEmail: false},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count 1, got %d", result.Count)
+	}
+
+	if len(sender.emails) != 0 {
+		t.Fatalf("expected no emails to be sent, got %d", len(sender.emails))
+	}
+}
+
+func TestConfirmationServiceDoesNotSendEmailWhenEmailIsEmpty(t *testing.T) {
+	repository := &fakeConfirmationRepository{}
+	sender := &fakeConfirmationEmailSender{}
+	service := NewConfirmationService(repository, sender)
+	yes := true
+
+	result, err := service.Create(context.Background(), []ConfirmationRequest{
+		{Name: "Maria Silva", Confirm: &yes, Email: "", FireEmail: true},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count 1, got %d", result.Count)
+	}
+
+	if len(sender.emails) != 0 {
+		t.Fatalf("expected no emails to be sent, got %d", len(sender.emails))
+	}
+}
+
+func TestConfirmationServiceSendsEmailOnceForNewEmail(t *testing.T) {
+	repository := &fakeConfirmationRepository{}
+	sender := &fakeConfirmationEmailSender{}
+	service := NewConfirmationService(repository, sender)
+	yes := true
+
+	result, err := service.Create(context.Background(), []ConfirmationRequest{
+		{Name: "Maria Silva", Confirm: &yes, Email: "maria@example.com", FireEmail: true},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count 1, got %d", result.Count)
+	}
+
+	if len(sender.emails) != 1 {
+		t.Fatalf("expected 1 email to be sent, got %d", len(sender.emails))
+	}
+
+	if sender.emails[0].To != "maria@example.com" {
+		t.Fatalf("expected email recipient, got %q", sender.emails[0].To)
+	}
+
+	if repository.confirmations[0].EmailSentAt == nil {
+		t.Fatal("expected confirmation to be marked as emailed")
+	}
+
+	result, err = service.Create(context.Background(), []ConfirmationRequest{
+		{Name: "Maria Silva", Confirm: &yes, Email: "maria@example.com", FireEmail: true},
+	})
+	if err != nil {
+		t.Fatalf("expected no error on duplicate email, got %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count 1, got %d", result.Count)
+	}
+
+	if len(sender.emails) != 1 {
+		t.Fatalf("expected no duplicate email, got %d emails", len(sender.emails))
+	}
+}
+
+func TestConfirmationServiceContinuesWhenEmailSendFails(t *testing.T) {
+	repository := &fakeConfirmationRepository{}
+	sender := &fakeConfirmationEmailSender{err: errors.New("email provider failed")}
+	service := NewConfirmationService(repository, sender)
+	yes := true
+
+	result, err := service.Create(context.Background(), []ConfirmationRequest{
+		{Name: "Maria Silva", Confirm: &yes, Email: "maria@example.com", FireEmail: true},
+	})
+	if err != nil {
+		t.Fatalf("expected confirmation flow to continue, got %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count 1, got %d", result.Count)
+	}
+
+	if len(repository.confirmations) != 1 {
+		t.Fatalf("expected confirmation to be saved, got %d", len(repository.confirmations))
+	}
+
+	if len(sender.emails) != 1 {
+		t.Fatalf("expected exactly 1 email attempt, got %d", len(sender.emails))
+	}
+
+	if repository.confirmations[0].EmailSentAt != nil {
+		t.Fatal("expected failed email not to be marked as sent")
+	}
+}
+
+func TestConfirmationServiceContinuesWhenEmailSenderIsNotConfigured(t *testing.T) {
+	repository := &fakeConfirmationRepository{}
+	service := NewConfirmationService(repository)
+	yes := true
+
+	result, err := service.Create(context.Background(), []ConfirmationRequest{
+		{Name: "Maria Silva", Confirm: &yes, Email: "maria@example.com", FireEmail: true},
+	})
+	if err != nil {
+		t.Fatalf("expected confirmation flow to continue, got %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count 1, got %d", result.Count)
+	}
+
+	if len(repository.confirmations) != 1 {
+		t.Fatalf("expected confirmation to be saved, got %d", len(repository.confirmations))
+	}
+
+	if repository.confirmations[0].EmailSentAt != nil {
+		t.Fatal("expected missing email sender not to be marked as sent")
 	}
 }
 
