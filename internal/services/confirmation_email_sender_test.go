@@ -34,6 +34,7 @@ func TestResendConfirmationEmailSenderSendsExpectedRequest(t *testing.T) {
 	sender := newTestResendConfirmationEmailSender(
 		"test-api-key",
 		"Marriage <no-reply@example.com>",
+		"",
 		server.URL,
 		server.Client(),
 	)
@@ -66,6 +67,59 @@ func TestResendConfirmationEmailSenderSendsExpectedRequest(t *testing.T) {
 	if requestBody.HTML == "" {
 		t.Fatal("expected html body")
 	}
+
+	if requestBody.Template != nil {
+		t.Fatalf("expected no template for fallback request, got %+v", requestBody.Template)
+	}
+}
+
+func TestResendConfirmationEmailSenderUsesTemplateWhenConfigured(t *testing.T) {
+	var requestBody resendEmailRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sender := newTestResendConfirmationEmailSender(
+		"test-api-key",
+		"Marriage <no-reply@example.com>",
+		"testversion",
+		server.URL,
+		server.Client(),
+	)
+
+	err := sender.SendConfirmation(context.Background(), ConfirmationEmail{
+		To:           "maria@example.com",
+		Name:         "Maria Silva",
+		Confirmation: true,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if requestBody.Template == nil {
+		t.Fatal("expected template payload")
+	}
+
+	if requestBody.Template.ID != "testversion" {
+		t.Fatalf("expected template alias, got %q", requestBody.Template.ID)
+	}
+
+	if requestBody.Template.Variables["NAME"] != "Maria Silva" {
+		t.Fatalf("expected NAME variable, got %q", requestBody.Template.Variables["NAME"])
+	}
+
+	if requestBody.HTML != "" {
+		t.Fatalf("expected no inline html when template is used, got %q", requestBody.HTML)
+	}
+
+	if requestBody.Text != "" {
+		t.Fatalf("expected no inline text when template is used, got %q", requestBody.Text)
+	}
 }
 
 func TestResendConfirmationEmailSenderReturnsErrorForProviderFailure(t *testing.T) {
@@ -77,6 +131,7 @@ func TestResendConfirmationEmailSenderReturnsErrorForProviderFailure(t *testing.
 	sender := newTestResendConfirmationEmailSender(
 		"test-api-key",
 		"Marriage <no-reply@example.com>",
+		"",
 		server.URL,
 		server.Client(),
 	)

@@ -14,10 +14,11 @@ import (
 const resendEmailEndpoint = "https://api.resend.com/emails"
 
 type ResendConfirmationEmailSender struct {
-	apiKey   string
-	from     string
-	endpoint string
-	client   *http.Client
+	apiKey     string
+	from       string
+	templateID string
+	endpoint   string
+	client     *http.Client
 }
 
 func NewResendConfirmationEmailSender(apiKey string, from string) ResendConfirmationEmailSender {
@@ -29,12 +30,23 @@ func NewResendConfirmationEmailSender(apiKey string, from string) ResendConfirma
 	}
 }
 
-func newTestResendConfirmationEmailSender(apiKey string, from string, endpoint string, client *http.Client) ResendConfirmationEmailSender {
+func NewResendConfirmationEmailSenderWithTemplate(apiKey string, from string, templateID string) ResendConfirmationEmailSender {
 	return ResendConfirmationEmailSender{
-		apiKey:   strings.TrimSpace(apiKey),
-		from:     strings.TrimSpace(from),
-		endpoint: endpoint,
-		client:   client,
+		apiKey:     strings.TrimSpace(apiKey),
+		from:       strings.TrimSpace(from),
+		templateID: strings.TrimSpace(templateID),
+		endpoint:   resendEmailEndpoint,
+		client:     http.DefaultClient,
+	}
+}
+
+func newTestResendConfirmationEmailSender(apiKey string, from string, templateID string, endpoint string, client *http.Client) ResendConfirmationEmailSender {
+	return ResendConfirmationEmailSender{
+		apiKey:     strings.TrimSpace(apiKey),
+		from:       strings.TrimSpace(from),
+		templateID: strings.TrimSpace(templateID),
+		endpoint:   endpoint,
+		client:     client,
 	}
 }
 
@@ -47,13 +59,7 @@ func (sender ResendConfirmationEmailSender) SendConfirmation(ctx context.Context
 		return fmt.Errorf("email from address is required")
 	}
 
-	payload := resendEmailRequest{
-		From:    sender.from,
-		To:      []string{email.To},
-		Subject: "Wedding confirmation received",
-		Text:    confirmationEmailText(email),
-		HTML:    confirmationEmailHTML(email),
-	}
+	payload := sender.emailRequest(email)
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -86,12 +92,40 @@ func (sender ResendConfirmationEmailSender) SendConfirmation(ctx context.Context
 	return nil
 }
 
+func (sender ResendConfirmationEmailSender) emailRequest(email ConfirmationEmail) resendEmailRequest {
+	request := resendEmailRequest{
+		From:    sender.from,
+		To:      []string{email.To},
+		Subject: "Wedding confirmation received",
+	}
+
+	if sender.templateID != "" {
+		request.Template = &resendEmailTemplate{
+			ID: sender.templateID,
+			Variables: map[string]string{
+				"NAME": email.Name,
+			},
+		}
+		return request
+	}
+
+	request.Text = confirmationEmailText(email)
+	request.HTML = confirmationEmailHTML(email)
+	return request
+}
+
 type resendEmailRequest struct {
-	From    string   `json:"from"`
-	To      []string `json:"to"`
-	Subject string   `json:"subject"`
-	Text    string   `json:"text"`
-	HTML    string   `json:"html"`
+	From     string               `json:"from"`
+	To       []string             `json:"to"`
+	Subject  string               `json:"subject"`
+	Text     string               `json:"text,omitempty"`
+	HTML     string               `json:"html,omitempty"`
+	Template *resendEmailTemplate `json:"template,omitempty"`
+}
+
+type resendEmailTemplate struct {
+	ID        string            `json:"id"`
+	Variables map[string]string `json:"variables"`
 }
 
 func confirmationEmailText(email ConfirmationEmail) string {

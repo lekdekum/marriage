@@ -76,12 +76,13 @@ func newConfirmationEmailSenderFromEnv() services.ConfirmationEmailSender {
 
 	apiKey := os.Getenv("RESEND_API_KEY")
 	from := os.Getenv("EMAIL_FROM")
+	templateID := os.Getenv("RESEND_CONFIRMATION_TEMPLATE_ID")
 	if apiKey == "" || from == "" {
 		slog.Error("resend email sender is not configured")
 		return nil
 	}
 
-	return services.NewResendConfirmationEmailSender(apiKey, from)
+	return services.NewResendConfirmationEmailSenderWithTemplate(apiKey, from, templateID)
 }
 
 func envOrDefault(key string, fallback string) string {
