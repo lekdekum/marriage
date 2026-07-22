@@ -9,7 +9,12 @@ import (
 	"marriage/internal/services"
 )
 
-func NewRouter(confirmationService services.ConfirmationService, authService services.AuthService, allowedOrigin string) http.Handler {
+func NewRouter(
+	confirmationService services.ConfirmationService,
+	reservedGiftService services.ReservedGiftService,
+	authService services.AuthService,
+	allowedOrigin string,
+) http.Handler {
 	mux := http.NewServeMux()
 
 	healthController := controllers.NewHealthController()
@@ -23,6 +28,10 @@ func NewRouter(confirmationService services.ConfirmationService, authService ser
 	mux.HandleFunc("GET /admin/confirmations", withAdminAuth(authService, confirmationController.List))
 	mux.HandleFunc("PATCH /admin/confirmations", withAdminAuth(authService, confirmationController.Update))
 	mux.HandleFunc("DELETE /admin/confirmations", withAdminAuth(authService, confirmationController.Delete))
+
+	reservedGiftController := controllers.NewReservedGiftController(reservedGiftService)
+	mux.HandleFunc("GET /reserved_gifts", reservedGiftController.List)
+	mux.HandleFunc("POST /reserved_gift", reservedGiftController.Create)
 
 	return withCORS(mux, allowedOrigin)
 }

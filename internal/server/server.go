@@ -47,9 +47,20 @@ func Run() {
 		os.Exit(1)
 	}
 
+	reservedGiftRepository := repositories.NewPostgresReservedGiftRepository(db)
+	if err := reservedGiftRepository.Migrate(ctx); err != nil {
+		slog.Error("failed to migrate reserved gifts database", "error", err)
+		os.Exit(1)
+	}
+
 	server := &http.Server{
-		Addr:         addr,
-		Handler:      routes.NewRouter(services.NewConfirmationService(confirmationRepository, emailSender), authService, allowedOrigin),
+		Addr: addr,
+		Handler: routes.NewRouter(
+			services.NewConfirmationService(confirmationRepository, emailSender),
+			services.NewReservedGiftService(reservedGiftRepository),
+			authService,
+			allowedOrigin,
+		),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,

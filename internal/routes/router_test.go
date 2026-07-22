@@ -19,6 +19,10 @@ type fakeConfirmationRepository struct {
 	confirmations []repositories.Confirmation
 }
 
+type fakeReservedGiftRepository struct {
+	reservedGifts []repositories.ReservedGift
+}
+
 func (repository *fakeConfirmationRepository) Create(ctx context.Context, confirmations []repositories.Confirmation) error {
 	repository.confirmations = append(repository.confirmations, confirmations...)
 	return nil
@@ -73,22 +77,54 @@ func (repository *fakeConfirmationRepository) MarkEmailSent(ctx context.Context,
 	return nil
 }
 
+func (repository *fakeReservedGiftRepository) Create(ctx context.Context, reservedGift repositories.ReservedGift) (bool, error) {
+	for _, existingReservedGift := range repository.reservedGifts {
+		if existingReservedGift.ID == reservedGift.ID {
+			return false, nil
+		}
+	}
+
+	repository.reservedGifts = append(repository.reservedGifts, reservedGift)
+	return true, nil
+}
+
+func (repository *fakeReservedGiftRepository) List(ctx context.Context) ([]repositories.ReservedGift, error) {
+	return repository.reservedGifts, nil
+}
+
 func newTestRouter() http.Handler {
-	return newTestRouterWithRepository(&fakeConfirmationRepository{})
+	return newTestRouterWithRepositories(&fakeConfirmationRepository{}, &fakeReservedGiftRepository{})
 }
 
 func newTestRouterWithRepository(repository *fakeConfirmationRepository) http.Handler {
-	return newTestRouterWithRepositoryAndOrigin(repository, "*")
+	return newTestRouterWithRepositories(repository, &fakeReservedGiftRepository{})
 }
 
 func newTestRouterWithRepositoryAndOrigin(repository *fakeConfirmationRepository, allowedOrigin string) http.Handler {
+	return newTestRouterWithRepositoriesAndOrigin(repository, &fakeReservedGiftRepository{}, allowedOrigin)
+}
+
+func newTestRouterWithRepositories(confirmationRepository *fakeConfirmationRepository, reservedGiftRepository *fakeReservedGiftRepository) http.Handler {
+	return newTestRouterWithRepositoriesAndOrigin(confirmationRepository, reservedGiftRepository, "*")
+}
+
+func newTestRouterWithRepositoriesAndOrigin(
+	confirmationRepository *fakeConfirmationRepository,
+	reservedGiftRepository *fakeReservedGiftRepository,
+	allowedOrigin string,
+) http.Handler {
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte("test-password"), bcrypt.MinCost)
 	if err != nil {
 		panic(err)
 	}
 
 	authService := services.NewAuthService(string(passwordHash), "test-jwt-secret", time.Hour)
-	return NewRouter(services.NewConfirmationService(repository), authService, allowedOrigin)
+	return NewRouter(
+		services.NewConfirmationService(confirmationRepository),
+		services.NewReservedGiftService(reservedGiftRepository),
+		authService,
+		allowedOrigin,
+	)
 }
 
 func loginAdmin(t *testing.T, serverURL string) string {
@@ -202,6 +238,104 @@ func TestConfirmationRouteRejectsInvalidPayload(t *testing.T) {
 
 	if len(responseBody.Details) != 3 {
 		t.Fatalf("expected 3 validation details, got %d", len(responseBody.Details))
+	}
+}
+
+func TestReservedGiftRouteCreatesReservedGift(t *testing.T) {
+	repository := &fakeReservedGiftRepository{}
+	server := httptest.NewServer(newTestRouterWithRepositories(&fakeConfirmationRepository{}, repository))
+	defer server.Close()
+
+	body := []byte(`{"id":"stand-mixer","name":"Maria Silva"}`)
+	response, err := http.Post(server.URL+"/reserved_gift", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /reserved_gift failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, response.StatusCode)
+	}
+
+	if len(repository.reservedGifts) != 1 {
+		t.Fatalf("expected 1 saved reserved gift, got %d", len(repository.reservedGifts))
+	}
+
+	if repository.reservedGifts[0].Timestamp.IsZero() {
+		t.Fatal("expected saved reserved gift to include timestamp")
+	}
+}
+
+func TestReservedGiftRouteRejectsDuplicateGiftID(t *testing.T) {
+	repository := &fakeReservedGiftRepository{}
+	server := httptest.NewServer(newTestRouterWithRepositories(&fakeConfirmationRepository{}, repository))
+	defer server.Close()
+
+	firstBody := []byte(`{"id":"stand-mixer","name":"Maria Silva"}`)
+	firstResponse, err := http.Post(server.URL+"/reserved_gift", "application/json", bytes.NewReader(firstBody))
+	if err != nil {
+		t.Fatalf("first POST /reserved_gift failed: %v", err)
+	}
+	defer firstResponse.Body.Close()
+
+	if firstResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("expected first status %d, got %d", http.StatusCreated, firstResponse.StatusCode)
+	}
+
+	secondBody := []byte(`{"id":"stand-mixer","name":"Joao Silva"}`)
+	secondResponse, err := http.Post(server.URL+"/reserved_gift", "application/json", bytes.NewReader(secondBody))
+	if err != nil {
+		t.Fatalf("second POST /reserved_gift failed: %v", err)
+	}
+	defer secondResponse.Body.Close()
+
+	if secondResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("expected second status %d, got %d", http.StatusConflict, secondResponse.StatusCode)
+	}
+
+	if len(repository.reservedGifts) != 1 {
+		t.Fatalf("expected duplicate gift id not to create another reservation, got %d", len(repository.reservedGifts))
+	}
+
+	if repository.reservedGifts[0].Name != "Maria Silva" {
+		t.Fatalf("expected original buyer to remain unchanged, got %q", repository.reservedGifts[0].Name)
+	}
+}
+
+func TestReservedGiftRouteListsReservedGifts(t *testing.T) {
+	repository := &fakeReservedGiftRepository{
+		reservedGifts: []repositories.ReservedGift{
+			{ID: "stand-mixer", Name: "Maria Silva", Timestamp: time.Now().UTC()},
+		},
+	}
+	server := httptest.NewServer(newTestRouterWithRepositories(&fakeConfirmationRepository{}, repository))
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/reserved_gifts")
+	if err != nil {
+		t.Fatalf("GET /reserved_gifts failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.StatusCode)
+	}
+
+	var responseBody []services.ReservedGiftResponse
+	if err := json.NewDecoder(response.Body).Decode(&responseBody); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+
+	if len(responseBody) != 1 {
+		t.Fatalf("expected 1 reserved gift, got %d", len(responseBody))
+	}
+
+	if responseBody[0].ID != "stand-mixer" {
+		t.Fatalf("expected reserved gift id, got %q", responseBody[0].ID)
+	}
+
+	if responseBody[0].Name != "Maria Silva" {
+		t.Fatalf("expected reserved gift name, got %q", responseBody[0].Name)
 	}
 }
 
