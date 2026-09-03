@@ -18,20 +18,49 @@ import (
 func Run() {
 	addr := ":" + envOrDefault("PORT", "8080")
 	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		slog.Error("DATABASE_URL is required")
-		os.Exit(1)
-	}
 	allowedOrigin := os.Getenv("ALLOWED_ORIGIN")
 	emailSender := newConfirmationEmailSenderFromEnv()
 	authService := services.NewAuthService(os.Getenv("ADMIN_PASSWORD_HASH"), os.Getenv("JWT_SECRET"), 24*time.Hour)
+
+	handler, cleanup := newHandler(databaseURL, emailSender, authService, allowedOrigin)
+	defer cleanup()
+
+	server := &http.Server{
+		Addr:         addr,
+		Handler:      handler,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	slog.Info("starting api server", "addr", addr)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Error("api server stopped unexpectedly", "error", err)
+		os.Exit(1)
+	}
+}
+
+func newHandler(
+	databaseURL string,
+	emailSender services.ConfirmationEmailSender,
+	authService services.AuthService,
+	allowedOrigin string,
+) (http.Handler, func()) {
+	if databaseURL == "" {
+		slog.Warn("DATABASE_URL is not configured; using in-memory repositories")
+		return routes.NewRouter(
+			services.NewConfirmationService(repositories.NewInMemoryConfirmationRepository(), emailSender),
+			services.NewReservedGiftService(repositories.NewInMemoryReservedGiftRepository()),
+			authService,
+			allowedOrigin,
+		), func() {}
+	}
 
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
 		slog.Error("failed to open database", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -53,24 +82,16 @@ func Run() {
 		os.Exit(1)
 	}
 
-	server := &http.Server{
-		Addr: addr,
-		Handler: routes.NewRouter(
+	return routes.NewRouter(
 			services.NewConfirmationService(confirmationRepository, emailSender),
 			services.NewReservedGiftService(reservedGiftRepository),
 			authService,
 			allowedOrigin,
-		),
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-
-	slog.Info("starting api server", "addr", addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		slog.Error("api server stopped unexpectedly", "error", err)
-		os.Exit(1)
-	}
+		), func() {
+			if err := db.Close(); err != nil {
+				slog.Error("failed to close database", "error", err)
+			}
+		}
 }
 
 func newConfirmationEmailSenderFromEnv() services.ConfirmationEmailSender {
