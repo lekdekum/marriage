@@ -47,38 +47,39 @@ func newHandler(
 	allowedOrigin string,
 ) (http.Handler, func()) {
 	if databaseURL == "" {
-		return newInMemoryHandler("DATABASE_URL is not configured", nil, emailSender, authService, allowedOrigin)
+		slog.Warn("DATABASE_URL is not configured; using in-memory repositories")
+		return routes.NewRouter(
+			services.NewConfirmationService(repositories.NewInMemoryConfirmationRepository(), emailSender),
+			services.NewReservedGiftService(repositories.NewInMemoryReservedGiftRepository()),
+			authService,
+			allowedOrigin,
+		), func() {}
 	}
 
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
-		return newInMemoryHandler("failed to open database", err, emailSender, authService, allowedOrigin)
+		slog.Error("failed to open database", "error", err)
+		os.Exit(1)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
-		if closeErr := db.Close(); closeErr != nil {
-			slog.Error("failed to close database", "error", closeErr)
-		}
-		return newInMemoryHandler("failed to connect to database", err, emailSender, authService, allowedOrigin)
+		slog.Error("failed to connect to database", "error", err)
+		os.Exit(1)
 	}
 
 	confirmationRepository := repositories.NewPostgresConfirmationRepository(db)
 	if err := confirmationRepository.Migrate(ctx); err != nil {
-		if closeErr := db.Close(); closeErr != nil {
-			slog.Error("failed to close database", "error", closeErr)
-		}
-		return newInMemoryHandler("failed to migrate database", err, emailSender, authService, allowedOrigin)
+		slog.Error("failed to migrate database", "error", err)
+		os.Exit(1)
 	}
 
 	reservedGiftRepository := repositories.NewPostgresReservedGiftRepository(db)
 	if err := reservedGiftRepository.Migrate(ctx); err != nil {
-		if closeErr := db.Close(); closeErr != nil {
-			slog.Error("failed to close database", "error", closeErr)
-		}
-		return newInMemoryHandler("failed to migrate reserved gifts database", err, emailSender, authService, allowedOrigin)
+		slog.Error("failed to migrate reserved gifts database", "error", err)
+		os.Exit(1)
 	}
 
 	return routes.NewRouter(
@@ -91,40 +92,6 @@ func newHandler(
 				slog.Error("failed to close database", "error", err)
 			}
 		}
-}
-
-func newInMemoryHandler(
-	reason string,
-	err error,
-	emailSender services.ConfirmationEmailSender,
-	authService services.AuthService,
-	allowedOrigin string,
-) (http.Handler, func()) {
-	if requireDatabase() {
-		if err == nil {
-			slog.Error(reason)
-		} else {
-			slog.Error(reason, "error", err)
-		}
-		os.Exit(1)
-	}
-
-	if err == nil {
-		slog.Warn(reason + "; using in-memory repositories")
-	} else {
-		slog.Warn(reason+"; using in-memory repositories", "error", err)
-	}
-
-	return routes.NewRouter(
-		services.NewConfirmationService(repositories.NewInMemoryConfirmationRepository(), emailSender),
-		services.NewReservedGiftService(repositories.NewInMemoryReservedGiftRepository()),
-		authService,
-		allowedOrigin,
-	), func() {}
-}
-
-func requireDatabase() bool {
-	return os.Getenv("REQUIRE_DATABASE") == "true"
 }
 
 func newConfirmationEmailSenderFromEnv() services.ConfirmationEmailSender {
