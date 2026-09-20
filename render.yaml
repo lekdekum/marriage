@@ -2,6 +2,19 @@ services:
   - type: web
     name: marriage-api
     runtime: go
+    plan: free
     buildCommand: go build -tags netgo -ldflags '-s -w' -o app ./cmd/api
     startCommand: ./app
     healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marriage-db
+          property: connectionString
+
+databases:
+  - name: marriage-db
+    databaseName: marriage
+    user: marriage
+    plan: free
+    postgresMajorVersion: "16"
