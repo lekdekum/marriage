@@ -47,13 +47,8 @@ func newHandler(
 	allowedOrigin string,
 ) (http.Handler, func()) {
 	if databaseURL == "" {
-		slog.Warn("DATABASE_URL is not configured; using in-memory repositories")
-		return routes.NewRouter(
-			services.NewConfirmationService(repositories.NewInMemoryConfirmationRepository(), emailSender),
-			services.NewReservedGiftService(repositories.NewInMemoryReservedGiftRepository()),
-			authService,
-			allowedOrigin,
-		), func() {}
+		slog.Error("DATABASE_URL is not configured")
+		os.Exit(1)
 	}
 
 	db, err := sql.Open("postgres", databaseURL)
